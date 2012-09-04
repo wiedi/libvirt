@@ -126,9 +126,22 @@ virStorageBackendSheepdogRefreshPool(virConnectPtr conn ATTRIBUTE_UNUSED,
     if (ret == 0)
         ret = virStorageBackendSheepdogParseNodeInfo(pool->def, output);
 
+    if (ret != 0) goto cleanup;
+
+    virCommandFree(cmd);
+    VIR_FREE(output);
+
+    cmd = virCommandNewArgList(COLLIE, "vdi","list","-r", NULL);
+    virCommandSetOutputBuffer(cmd, &output);
+    ret = virCommandRun(cmd, NULL);
+    if (ret == 0)
+        ret = virStorageBackendSheepdogParseVdiList(pool, output);
+
+cleanup:
     virCommandFree(cmd);
     VIR_FREE(output);
     return ret;
+
 }
 
 
@@ -175,9 +188,107 @@ virStorageBackendSheepdogCreateVol(virConnectPtr conn ATTRIBUTE_UNUSED,
     return ret;
 }
 
+int
+virStorageBackendSheepdogParseVdiList(virStoragePoolObjPtr pool,
+                                      char *output)
+{
+    /* fields:
+     * type,name,id,size,used,shared,creation time,vdi id, [ta]
+     *
+     * example output:
+     * s 650f4363-dd7b-4aba-a954-7d6e1ab0ba51 1 2097152000 0 2088763392 1343921684 5fda1
+     * = 650f4363-dd7b-4aba-a954-7d6e1ab0ba51 2 2097152000 381681664 1707081728 1343921685 5fda2
+     * = dd5089ac-0677-4463-8981-9b7f4c81ed75 1 10485760 8388608 0 1343909537 1c329d
+     * = db0ecced-3d23-4a50-a282-df10e6324e5d 1 10485760 8388608 0 1343921037 1fea11
+     * = eb1e30fb-d373-4ba9-aede-5b0445202111 1 10485760 8388608 0 1343921382 47b19c
+     * = acf1d6f0-e132-4040-aadf-6d53b58f2fd8 1 10485760 8388608 0 1343909627 55f030
+     * s 79d9030f-8409-40b9-8b99-f90c966c244d 1 8589934592 0 2172649472 1344337550 62751b
+     */
+
+    int id;
+    const char *p, *next, *name;
+    virStorageVolDefPtr vol = NULL;
+    p = output;
+
+    do {
+        char *end;
+
+        if ((next = strchr(p, '\n')))
+            ++next;
+
+        /* ignore snapshots */
+        if (*p != '=')
+            continue;
+
+        /* skip space */
+        if (p + 2 < next) {
+            p += 2;
+        } else {
+            return -1;
+        }
+
+        /* lookup name */
+        name = p;
+        while (*p != '\0' && *p != ' ') {
+            if (*p == '\\')
+                ++p;
+            ++p;
+        }
+
+        if (VIR_ALLOC(vol) < 0) goto no_memory;
+        if ((vol->name = strndup(name, p-name)) == NULL) goto cleanup;
+        vol->type = VIR_STORAGE_VOL_NETWORK;
+
+        VIR_FREE(vol->target.path);
+        if (virAsprintf(&vol->target.path, "%s",
+                        vol->name) == -1) {
+             virReportOOMError();
+             goto cleanup;
+        }
+
+        VIR_FREE(vol->key);
+        if (virAsprintf(&vol->key, "%s/%s",
+	                pool->def->source.name, vol->name) == -1) {
+            virReportOOMError();
+            goto cleanup;
+        }
+
+        if (virStrToLong_i(p, &end, 10, &id) < 0)
+            return -1;
+
+        p = end + 1;
+
+        if (virStrToLong_ull(p, &end, 10, &vol->capacity) < 0)
+            return -1;
+
+        p = end + 1;
+
+        if (virStrToLong_ull(p, &end, 10, &vol->allocation) < 0)
+            return -1;
+
+        if (VIR_REALLOC_N(pool->volumes.objs,
+                          pool->volumes.count+1) < 0)
+            goto no_memory;
+        pool->volumes.objs[pool->volumes.count++] = vol;
+        vol = NULL;
+
+    } while ((p = next));
+
+    return 0;
+
+no_memory:
+    virReportOOMError();
+    /* fallthrough */
+
+cleanup:
+    virStorageVolDefFree(vol);
+    virStoragePoolObjClearVols(pool);
+    return -1;
+
+}
 
 int
-virStorageBackendSheepdogParseVdiList(virStorageVolDefPtr vol,
+virStorageBackendSheepdogParseVdi(virStorageVolDefPtr vol,
                                       char *output)
 {
     /* fields:
@@ -254,7 +365,7 @@ virStorageBackendSheepdogRefreshVol(virConnectPtr conn ATTRIBUTE_UNUSED,
     if (ret < 0)
         goto cleanup;
 
-    if ((ret = virStorageBackendSheepdogParseVdiList(vol, output)) < 0)
+    if ((ret = virStorageBackendSheepdogParseVdi(vol, output)) < 0)
         goto cleanup;
 
     vol->type = VIR_STORAGE_VOL_NETWORK;

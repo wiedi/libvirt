@@ -105,7 +105,7 @@ test_vdi_list_parser(collie_test test, char *poolxml, char *volxml)
     if (!output)
         goto cleanup;
 
-    if (virStorageBackendSheepdogParseVdiList(vol, output) !=
+    if (virStorageBackendSheepdogParseVdi(vol, output) !=
         test.expected_return)
         goto cleanup;
 

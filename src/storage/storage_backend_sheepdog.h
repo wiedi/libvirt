@@ -31,7 +31,9 @@
 
 int virStorageBackendSheepdogParseNodeInfo(virStoragePoolDefPtr pool,
                                            char *output);
-int virStorageBackendSheepdogParseVdiList(virStorageVolDefPtr vol,
+int virStorageBackendSheepdogParseVdi(virStorageVolDefPtr vol,
+                                          char *output);
+int virStorageBackendSheepdogParseVdiList(virStoragePoolObjPtr pool,
                                           char *output);
 
 extern virStorageBackend virStorageBackendSheepdog;
